@@ -135,3 +135,8 @@ Potential future additions include:
 **Pan-Atlantic University Tech Innovation Club — Platform Discovery Stream**
 
 A prototype exploring how technology can improve discovery, visibility, and connections between students and the businesses and platforms serving their community.
+
+
+
+
+uvicorn main:app --reload --port 8000
