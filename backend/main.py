@@ -90,8 +90,8 @@ Base.metadata.create_all(bind=engine)
 
 WORKBOOK_PATH = Path(__file__).with_name("Campus_Platform_Discovery_Data_v2.xlsx")
 CLUB_MEETING_DETAILS = {
-    "meeting_time": "To be announced",
-    "meeting_location": "To be announced",
+    "meeting_time": "7pm",
+    "meeting_location": "Abuja Hall",
 }
 OFFERING_IMAGES = {
     "Fashion, Beauty & Lifestyle": "https://images.unsplash.com/photo-1483985988355-763728e1935b?w=800&auto=format&fit=crop&q=80",
