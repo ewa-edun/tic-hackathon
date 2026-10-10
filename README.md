@@ -1,1 +1,1 @@
-# tic-hackathon
+# Tic-hackathon
