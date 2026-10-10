@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   BriefcaseBusiness,
   Clock3,
+  Heart,
   LoaderCircle,
   Mail,
   MapPin,
@@ -17,6 +18,7 @@ import {
   ShoppingCart,
   Sparkles,
   Store,
+  Tag,
   Users,
   X,
 } from 'lucide-react';
@@ -24,6 +26,7 @@ import './App.css';
 
 const API_BASE_URL = 'http://localhost:8000/api';
 const PAU_EMAIL_PATTERN = /^[^\s@]+@pau\.edu\.ng$/;
+const FAVORITES_STORAGE_KEY = 'pauconnect:favorites:v1';
 const formatPrice = (price) =>
   new Intl.NumberFormat('en-NG', {
     style: 'currency',
@@ -31,12 +34,27 @@ const formatPrice = (price) =>
     maximumFractionDigits: 0,
   }).format(price);
 
-function getBusinessTheme(business) {
-  const category = business.category.toLowerCase();
-  if (category.includes('tech')) return 'from-sky-500 via-indigo-500 to-violet-600';
-  if (category.includes('daily')) return 'from-amber-400 via-orange-500 to-rose-500';
-  if (category.includes('academic')) return 'from-emerald-400 via-teal-500 to-cyan-600';
-  return 'from-fuchsia-500 via-rose-500 to-orange-400';
+function getBusinessImage(business) {
+  const details = `${business.org_name} ${business.category}`.toLowerCase();
+  if (/nail|cosmetic|makeup/.test(details)) {
+    return 'https://images.unsplash.com/photo-1604654894610-df63bc536371?w=1000&auto=format&fit=crop&q=85';
+  }
+  if (/fashion|cloth|apparel|style|tailor/.test(details)) {
+    return 'https://images.unsplash.com/photo-1483985988355-763728e1935b?w=1000&auto=format&fit=crop&q=85';
+  }
+  if (/beauty|glam/.test(details)) {
+    return 'https://images.unsplash.com/photo-1560750588-73207b1ef5b8?w=1000&auto=format&fit=crop&q=85';
+  }
+  if (/tech|digital|phone|gadget|computer/.test(details)) {
+    return 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=1000&auto=format&fit=crop&q=85';
+  }
+  if (/food|snack|drink|grocery|meal/.test(details)) {
+    return 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=1000&auto=format&fit=crop&q=85';
+  }
+  if (/book|academic|print|education/.test(details)) {
+    return 'https://images.unsplash.com/photo-1507842217343-583bb7270b66?w=1000&auto=format&fit=crop&q=85';
+  }
+  return 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1000&auto=format&fit=crop&q=85';
 }
 
 function getInitials(name) {
@@ -49,19 +67,44 @@ function getInitials(name) {
     .toUpperCase();
 }
 
+function readSavedProducts() {
+  try {
+    const stored = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+    const parsed = stored ? JSON.parse(stored) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (product) =>
+            Number.isSafeInteger(product?.id) &&
+            typeof product.title === 'string' &&
+            Number.isFinite(product.price) &&
+            Number.isFinite(product.stock),
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function App() {
   const [businesses, setBusinesses] = useState([]);
   const [activeBusiness, setActiveBusiness] = useState(null);
   const [activeClub, setActiveClub] = useState(null);
   const [products, setProducts] = useState([]);
+  const [favorites, setFavorites] = useState(readSavedProducts);
+  const [promoCodes, setPromoCodes] = useState([]);
   const [cart, setCart] = useState([]);
   const [businessSearch, setBusinessSearch] = useState('');
+  const [isFavoritesView, setIsFavoritesView] = useState(false);
   const [loadingBusinesses, setLoadingBusinesses] = useState(true);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [submittingOrder, setSubmittingOrder] = useState(false);
+  const [validatingPromo, setValidatingPromo] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [checkoutEmail, setCheckoutEmail] = useState('');
+  const [promoCodeInput, setPromoCodeInput] = useState('');
+  const [appliedPromo, setAppliedPromo] = useState(null);
   const [emailError, setEmailError] = useState('');
+  const [promoError, setPromoError] = useState('');
   const [notice, setNotice] = useState('');
   const [orderComplete, setOrderComplete] = useState(false);
 
@@ -74,6 +117,20 @@ export default function App() {
         if (!response.ok) throw new Error('Could not load businesses.');
         const data = await response.json();
         if (!cancelled) setBusinesses(data);
+
+        const promoResponse = await fetch(`${API_BASE_URL}/promo-codes`);
+        if (!promoResponse.ok) {
+          throw new Error('Could not load current business promo codes.');
+        }
+        const promoData = await promoResponse.json();
+        if (!cancelled) {
+          setPromoCodes((current) => [
+            ...current.filter(
+              (promo) => !promoData.some((item) => item.code === promo.code),
+            ),
+            ...promoData,
+          ]);
+        }
       } catch (error) {
         if (!cancelled) setNotice(error.message || 'Could not connect to PAU Connect.');
       } finally {
@@ -86,6 +143,34 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeBusiness) return undefined;
+    let cancelled = false;
+
+    async function loadBusinessPromoCodes() {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/promo-codes?business_id=${activeBusiness.id}`,
+        );
+        if (!response.ok) throw new Error('Could not load this business’s offers.');
+        const data = await response.json();
+        if (!cancelled) {
+          setPromoCodes((current) => [
+            ...current.filter((promo) => promo.business_id !== activeBusiness.id),
+            ...data,
+          ]);
+        }
+      } catch (error) {
+        if (!cancelled) setNotice(error.message || 'Could not load business offers.');
+      }
+    }
+
+    loadBusinessPromoCodes();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBusiness]);
 
   useEffect(() => {
     if (!activeBusiness) return undefined;
@@ -138,7 +223,37 @@ export default function App() {
 
   const itemCount = cart.reduce((count, item) => count + item.qty, 0);
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const promoDiscount = appliedPromo?.discount_amount || 0;
+  const checkoutTotal = Math.max(0, cartTotal - promoDiscount);
   const verifiedCount = businesses.filter((business) => business.verified).length;
+
+  function clearAppliedPromo() {
+    setAppliedPromo(null);
+    setPromoCodeInput('');
+    setPromoError('');
+  }
+
+  function toggleFavorite(product) {
+    const isSaved = favorites.some((item) => item.id === product.id);
+    const updatedFavorites = isSaved
+      ? favorites.filter((item) => item.id !== product.id)
+      : [...favorites, product];
+    setFavorites(updatedFavorites);
+    try {
+      window.localStorage.setItem(
+        FAVORITES_STORAGE_KEY,
+        JSON.stringify(updatedFavorites),
+      );
+    } catch {
+      setNotice('Favorites could not be saved on this device.');
+      return;
+    }
+    setNotice(
+      isSaved
+        ? `${product.title} removed from your saved items.`
+        : `${product.title} saved to your favorites.`,
+    );
+  }
 
   function addToCart(product) {
     const existing = cart.find((item) => item.id === product.id);
@@ -150,6 +265,7 @@ export default function App() {
       setNotice('There are no more units available for this listing.');
       return;
     }
+    clearAppliedPromo();
     setCart((currentCart) => {
       const currentItem = currentCart.find((item) => item.id === product.id);
       if (currentItem) {
@@ -164,6 +280,7 @@ export default function App() {
   }
 
   function changeQuantity(productId, amount) {
+    clearAppliedPromo();
     setCart((currentCart) =>
       currentCart
         .map((item) => {
@@ -179,6 +296,64 @@ export default function App() {
     setActiveBusiness(null);
     setActiveClub(null);
     setProducts([]);
+    setIsFavoritesView(false);
+  }
+
+  function openFavorites() {
+    setActiveBusiness(null);
+    setActiveClub(null);
+    setProducts([]);
+    setIsFavoritesView(true);
+  }
+
+  function openBusiness(business) {
+    setIsFavoritesView(false);
+    setActiveBusiness(business);
+  }
+
+  async function applyPromoCode(event, providedCode) {
+    event?.preventDefault();
+    const code = (providedCode || promoCodeInput).trim().toUpperCase();
+    if (!code) {
+      setPromoError('Enter a promo code to apply it.');
+      return;
+    }
+    if (cart.length === 0) {
+      setPromoError('Add a listing to your cart before applying a code.');
+      return;
+    }
+
+    setPromoError('');
+    setValidatingPromo(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/promo-codes/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          items: cart.map(({ id, qty }) => ({
+            product_id: id,
+            quantity: qty,
+          })),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          typeof result.detail === 'string'
+            ? result.detail
+            : 'That promo code could not be applied.',
+        );
+      }
+      setAppliedPromo(result);
+      setPromoCodeInput(result.code);
+      setPromoError('');
+    } catch (error) {
+      setAppliedPromo(null);
+      setPromoError(error.message || 'That promo code could not be applied.');
+    } finally {
+      setValidatingPromo(false);
+    }
   }
 
   async function submitOrder(event) {
@@ -192,6 +367,10 @@ export default function App() {
       setNotice('Your cart is empty.');
       return;
     }
+    if (validatingPromo) {
+      setNotice('Please wait while the promo code is being checked.');
+      return;
+    }
 
     setEmailError('');
     setSubmittingOrder(true);
@@ -201,6 +380,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pau_email: email,
+          promo_code: appliedPromo?.code || null,
           items: cart.map(({ id, qty }) => ({
             product_id: id,
             quantity: qty,
@@ -224,6 +404,7 @@ export default function App() {
         }),
       );
       setCart([]);
+      clearAppliedPromo();
       setOrderComplete(true);
       setNotice('');
     } catch (error) {
@@ -236,14 +417,14 @@ export default function App() {
   return (
     <div className="page-shell min-h-screen text-slate-900">
       <header className="site-header sticky top-0 z-30">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3.5 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-3.5 sm:gap-4 sm:px-6 lg:px-8">
           <button
             type="button"
             onClick={openDirectory}
-            className="flex items-center gap-3 text-left"
+            className="flex items-center gap-2.5 text-left sm:gap-3"
             aria-label="PAU Connect home"
           >
-            <span className="brand-mark flex h-11 w-11 items-center justify-center rounded-2xl text-white">
+            <span className="brand-mark flex h-10 w-10 items-center justify-center rounded-2xl text-white sm:h-11 sm:w-11">
               <Store className="h-5 w-5" />
             </span>
             <span>
@@ -255,7 +436,7 @@ export default function App() {
               </span>
             </span>
           </button>
-          {!activeBusiness && (
+          {!activeBusiness && !isFavoritesView && (
             <nav className="hidden items-center gap-7 text-sm font-semibold text-slate-500 md:flex">
               <a href="#businesses" className="transition hover:text-indigo-700">Discover</a>
               <a href="#clubs" className="transition hover:text-indigo-700">Communities</a>
@@ -267,11 +448,29 @@ export default function App() {
           )}
           <button
             type="button"
+            onClick={isFavoritesView ? openDirectory : openFavorites}
+            aria-label={`Favorites (${favorites.length})`}
+            aria-pressed={isFavoritesView}
+            className="favorite-trigger inline-flex items-center gap-2 rounded-xl border border-rose-100 bg-white px-2.5 py-2.5 text-sm font-bold text-rose-600 transition hover:border-rose-200 hover:bg-rose-50 sm:px-3"
+          >
+            <Heart
+              className="h-4 w-4"
+              fill={isFavoritesView ? 'currentColor' : 'none'}
+            />
+            <span className="hidden sm:inline">
+              {isFavoritesView ? 'Discover' : 'Favorites'}
+            </span>
+            <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-xs">
+              {favorites.length}
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={() => {
               setOrderComplete(false);
               setIsCartOpen(true);
             }}
-            className="cart-trigger inline-flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm font-bold text-white transition sm:px-4"
+            className="cart-trigger inline-flex items-center gap-2 rounded-xl px-2.5 py-2.5 text-sm font-bold text-white transition sm:gap-2.5 sm:px-4"
           >
             <ShoppingCart className="h-4 w-4" />
             <span className="hidden sm:inline">Booking cart</span>
@@ -283,7 +482,7 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 pb-16 pt-7 sm:px-6 sm:pt-10 lg:px-8">
-        {activeBusiness ? (
+        {activeBusiness || isFavoritesView ? (
           <section>
             <button
               type="button"
@@ -291,8 +490,9 @@ export default function App() {
               className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:-translate-x-0.5 hover:border-indigo-200 hover:text-indigo-700"
             >
               <ArrowLeft className="h-4 w-4" />
-              All businesses
+              {isFavoritesView ? 'Back to marketplace' : 'All businesses'}
             </button>
+            {activeBusiness && (
             <div className="market-hero relative isolate mb-8 overflow-hidden rounded-[2rem] p-7 text-white shadow-xl sm:p-10">
               <div className="hero-orb hero-orb-one" />
               <div className="flex flex-wrap items-start justify-between gap-5">
@@ -326,40 +526,87 @@ export default function App() {
                 </a>
               )}
             </div>
+            )}
 
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <span className="section-kicker">CURATED FOR CAMPUS</span>
-                <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950">Listings</h2>
+                <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950">
+                  {isFavoritesView ? 'Your saved finds' : 'Listings'}
+                </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Products and services from {activeBusiness.org_name}
+                  {isFavoritesView
+                    ? 'Your favorite products and services, all in one place.'
+                    : `Products and services from ${activeBusiness.org_name}`}
                 </p>
               </div>
               <span className="rounded-full border border-indigo-100 bg-white px-3.5 py-2 text-xs font-bold text-indigo-700 shadow-sm">
-                {products.length} {products.length === 1 ? 'listing' : 'listings'}
+                {activeBusiness ? products.length : favorites.length}{' '}
+                {(activeBusiness ? products.length : favorites.length) === 1
+                  ? 'listing'
+                  : 'listings'}
               </span>
             </div>
 
-            {loadingProducts ? (
+            {activeBusiness && loadingProducts ? (
               <LoadingState label="Loading listings…" />
-            ) : products.length === 0 ? (
+            ) : (activeBusiness ? products : favorites).length === 0 ? (
               <EmptyState
-                icon={<PackageCheck className="h-7 w-7" />}
-                title="No listings yet"
-                message="This business hasn’t added any products or services yet."
+                icon={
+                  isFavoritesView ? (
+                    <Heart className="h-7 w-7" />
+                  ) : (
+                    <PackageCheck className="h-7 w-7" />
+                  )
+                }
+                title={isFavoritesView ? 'No favorites saved yet' : 'No listings yet'}
+                message={
+                  isFavoritesView
+                    ? 'Tap the heart on a listing to keep it close for later.'
+                    : 'This business hasn’t added any products or services yet.'
+                }
               />
             ) : (
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {products.map((product) => (
+                {(activeBusiness ? products : favorites).map((product) => (
                   <article
                     key={product.id}
                     className="business-card overflow-hidden rounded-[1.4rem] border border-slate-200/80 bg-white shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-xl"
                   >
-                    <img
-                      src={product.image}
-                      alt={product.title}
-                      className="h-52 w-full bg-slate-100 object-cover transition duration-500 hover:scale-[1.025]"
-                    />
+                    <div className="product-image-wrap relative">
+                      <img
+                        src={product.image}
+                        alt={product.offering_details || product.title}
+                        className="h-52 w-full bg-slate-100 object-cover transition duration-500 hover:scale-[1.025]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite(product)}
+                        aria-label={
+                          favorites.some((item) => item.id === product.id)
+                            ? `Remove ${product.title} from favorites`
+                            : `Add ${product.title} to favorites`
+                        }
+                        aria-pressed={favorites.some(
+                          (item) => item.id === product.id,
+                        )}
+                        className="favorite-product-button absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-rose-600 shadow-lg backdrop-blur transition hover:scale-105 hover:bg-white"
+                      >
+                        <Heart
+                          className="h-5 w-5"
+                          fill={
+                            favorites.some((item) => item.id === product.id)
+                              ? 'currentColor'
+                              : 'none'
+                          }
+                        />
+                      </button>
+                      {isFavoritesView && product.seller && (
+                        <span className="absolute bottom-3 left-3 rounded-full bg-slate-950/70 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur">
+                          {product.seller}
+                        </span>
+                      )}
+                    </div>
                     <div className="space-y-4 p-5">
                       <div>
                         <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-indigo-600">
@@ -411,16 +658,16 @@ export default function App() {
                 <div className="max-w-2xl">
                   <span className="hero-eyebrow inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-semibold">
                     <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-                    THE PAU COMMUNITY, IN ONE PLACE
+                    TOP FINDS FOR PAU STUDENTS
                   </span>
                   <h1 className="mt-6 text-[2.65rem] font-black leading-[1.04] tracking-[-0.055em] sm:text-6xl lg:text-[4.25rem]">
-                    Campus life,
+                    Student life,
                     <br />
-                    <span className="hero-heading-accent">well connected.</span>
+                    <span className="hero-heading-accent">well supplied.</span>
                   </h1>
                   <p className="mt-5 max-w-xl text-sm leading-7 text-indigo-100 sm:text-base">
-                    Find student businesses, useful services, and the people
-                    making things happen around PAU.
+                    Shop student businesses, discover everyday campus services,
+                    and find the people making PAU life better.
                   </p>
                   <label className="hero-search mt-7 flex max-w-xl items-center gap-3 rounded-2xl px-4 py-1 shadow-2xl">
                     <Search className="h-5 w-5 shrink-0 text-indigo-500" />
@@ -435,6 +682,35 @@ export default function App() {
                       SEARCH
                     </span>
                   </label>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {['Fashion & beauty', 'Tech services', 'Daily essentials'].map(
+                      (category) => (
+                        <button
+                          type="button"
+                          key={category}
+                          onClick={() => setBusinessSearch(category.split(' ')[0])}
+                          className="hero-category-chip rounded-full px-3 py-1.5 text-xs font-semibold transition hover:bg-white/20"
+                        >
+                          {category}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <a
+                      href="#businesses"
+                      className="hero-primary-action inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition hover:-translate-y-0.5"
+                    >
+                      Explore businesses <ArrowUpRight className="h-4 w-4" />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={openFavorites}
+                      className="hero-secondary-action inline-flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-bold transition hover:bg-white/15"
+                    >
+                      <Heart className="h-4 w-4" /> Saved items
+                    </button>
+                  </div>
                   <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-medium text-indigo-100">
                     <span className="inline-flex items-center gap-1.5">
                       <ShieldCheck className="h-4 w-4 text-emerald-300" />
@@ -447,48 +723,28 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="hero-showcase hidden lg:block" aria-hidden="true">
-                  <div className="showcase-glow" />
-                  <div className="showcase-card showcase-card-back">
-                    <div className="flex items-center gap-3">
-                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                        <BriefcaseBusiness className="h-5 w-5" />
+                <div
+                  className="hero-showcase mt-6 h-48 sm:h-56 lg:mt-0 lg:h-[310px]"
+                  aria-hidden="true"
+                >
+                  <div className="hero-photo-card">
+                    <img
+                      src="https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?w=1000&amp;auto=format&amp;fit=crop&amp;q=85"
+                      alt=""
+                      className="h-full w-full rounded-[1.6rem] object-cover"
+                    />
+                    <div className="hero-photo-caption">
+                      <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/75">
+                        Campus directory
                       </span>
-                      <div>
-                        <span className="block text-xs font-bold text-slate-900">Campus finds</span>
-                        <span className="text-[10px] text-slate-500">Made by your community</span>
-                      </div>
+                      <span className="mt-1 block text-lg font-black text-white">
+                        Made by your community
+                      </span>
                     </div>
-                    <div className="showcase-mini-row mt-4">
-                      <span className="mini-dot bg-rose-400" />
-                      <span className="mini-dot bg-violet-400" />
-                      <span className="mini-dot bg-emerald-400" />
-                      <span className="mini-dot bg-amber-400" />
-                      <span className="ml-1 text-[10px] font-semibold text-slate-500">and so much more</span>
-                    </div>
-                  </div>
-                  <div className="showcase-card showcase-card-front">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Featured community</span>
-                      <BadgeCheck className="h-4 w-4 text-emerald-500" />
-                    </div>
-                    <div className="mt-4 flex items-center gap-3">
-                      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-lg font-black text-white">T</span>
-                      <div>
-                        <span className="block text-sm font-black text-slate-900">TIC Community</span>
-                        <span className="mt-0.5 flex items-center gap-1 text-[10px] text-slate-500">
-                          <MapPin className="h-3 w-3" /> Pan-Atlantic University
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-4 flex items-center justify-between rounded-xl bg-indigo-50 px-3 py-2.5">
-                      <span className="text-[10px] font-semibold text-indigo-700">Explore campus life</span>
-                      <ArrowUpRight className="h-4 w-4 text-indigo-700" />
-                    </div>
-                  </div>
-                  <div className="showcase-sticker">
-                    <Sparkles className="h-4 w-4" />
-                    <span>Find your people</span>
+                    <span className="hero-photo-sticker">
+                      <Sparkles className="h-4 w-4" />
+                      Find your next favorite
+                    </span>
                   </div>
                 </div>
               </div>
@@ -497,7 +753,7 @@ export default function App() {
             <section id="businesses" className="scroll-mt-28">
               <div className="section-heading mb-5 flex flex-wrap items-end justify-between gap-3">
                 <div>
-                  <span className="section-kicker">DISCOVER & SUPPORT</span>
+                  <span className="section-kicker">DISCOVER &amp; SUPPORT</span>
                   <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">
                     Campus businesses
                   </h2>
@@ -521,15 +777,30 @@ export default function App() {
               />
             ) : (
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredBusinesses.map((business) => (
+                {filteredBusinesses.map((business) => {
+                  const promo = promoCodes.find(
+                    (item) => item.business_id === business.id,
+                  );
+                  return (
                   <button
                     type="button"
                     key={business.id}
-                    onClick={() => setActiveBusiness(business)}
+                    onClick={() => openBusiness(business)}
                     className="business-card group overflow-hidden rounded-[1.4rem] border border-slate-200/80 bg-white text-left shadow-sm transition duration-300 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-xl"
                   >
-                    <div className={`business-card-cover relative flex h-32 items-end overflow-hidden bg-gradient-to-br ${getBusinessTheme(business)} p-5`}>
-                      <div className="business-cover-pattern" />
+                    <div className="business-card-cover relative flex h-36 items-end overflow-hidden bg-slate-200 p-5">
+                      <img
+                        src={getBusinessImage(business)}
+                        alt={`${business.category} at ${business.org_name}`}
+                        className="business-cover-image absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                        loading="lazy"
+                        onError={(event) => {
+                          event.currentTarget.onerror = null;
+                          event.currentTarget.src =
+                            'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1000&auto=format&fit=crop&q=85';
+                        }}
+                      />
+                      <div className="business-cover-shade absolute inset-0" />
                       <span className="business-initials relative z-10 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/40 bg-white/90 text-xl font-black text-slate-900 shadow-lg backdrop-blur">
                         {getInitials(business.org_name)}
                       </span>
@@ -554,13 +825,30 @@ export default function App() {
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-600">
                           {business.tag}
                         </span>
-                        <span className="text-xs font-bold text-indigo-700">
-                          Explore business
-                        </span>
+                        {promo ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
+                            <Tag className="h-3.5 w-3.5" />
+                            {promo.discount_percent}% off
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-indigo-700">
+                            Explore business
+                          </span>
+                        )}
                       </div>
+                      {promo && (
+                        <p className="mt-2 text-[11px] font-medium text-slate-500">
+                          Use{' '}
+                          <span className="font-bold tracking-wide text-emerald-700">
+                            {promo.code}
+                          </span>{' '}
+                          at checkout
+                        </p>
+                      )}
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -804,7 +1092,8 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => changeQuantity(item.id, -1)}
-                              className="rounded-lg border border-slate-200 p-1.5 hover:bg-slate-50"
+                              disabled={validatingPromo || submittingOrder}
+                              className="rounded-lg border border-slate-200 p-1.5 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label={`Remove one ${item.title}`}
                             >
                               <Minus className="h-3.5 w-3.5" />
@@ -815,7 +1104,11 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => changeQuantity(item.id, 1)}
-                              disabled={item.qty >= item.stock}
+                              disabled={
+                                item.qty >= item.stock ||
+                                validatingPromo ||
+                                submittingOrder
+                              }
                               className="rounded-lg border border-slate-200 p-1.5 hover:bg-slate-50 disabled:opacity-40"
                               aria-label={`Add one ${item.title}`}
                             >
@@ -832,11 +1125,25 @@ export default function App() {
                 </div>
                 <form
                   onSubmit={submitOrder}
-                  className="space-y-4 border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-7"
+                  className="space-y-3.5 border-t border-slate-200 bg-slate-50 px-5 py-5 sm:px-7"
                 >
-                  <div className="flex justify-between text-base font-black">
-                    <span>Order total</span>
-                    <span>{formatPrice(cartTotal)}</span>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Subtotal</span>
+                      <span>{formatPrice(cartTotal)}</span>
+                    </div>
+                    {appliedPromo && (
+                      <div className="flex justify-between font-semibold text-emerald-700">
+                        <span>
+                          {appliedPromo.code} ({appliedPromo.discount_percent}%)
+                        </span>
+                        <span>−{formatPrice(promoDiscount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-black text-slate-950">
+                      <span>Order total</span>
+                      <span>{formatPrice(checkoutTotal)}</span>
+                    </div>
                   </div>
                   {cart.some((item) =>
                     /[-–—]/.test(item.price_display || ''),
@@ -846,6 +1153,104 @@ export default function App() {
                       price ranges. The business can confirm the final quote.
                     </p>
                   )}
+                  <div className="rounded-2xl border border-indigo-100 bg-white p-3.5">
+                    <label
+                      htmlFor="promo-code"
+                      className="mb-2 flex items-center gap-2 text-sm font-bold text-slate-800"
+                    >
+                      <Tag className="h-4 w-4 text-indigo-600" />
+                      Business promo code
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        id="promo-code"
+                        type="text"
+                        disabled={validatingPromo || submittingOrder}
+                        value={promoCodeInput}
+                        onChange={(event) => {
+                          setPromoCodeInput(event.target.value.toUpperCase());
+                          setPromoError('');
+                          if (
+                            appliedPromo &&
+                            event.target.value.toUpperCase() !== appliedPromo.code
+                          ) {
+                            setAppliedPromo(null);
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') applyPromoCode(event);
+                        }}
+                        placeholder="Enter code"
+                        autoComplete="off"
+                        className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm uppercase outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                        aria-describedby={
+                          promoError ? 'promo-error' : 'promo-help'
+                        }
+                      />
+                      {appliedPromo ? (
+                        <button
+                          type="button"
+                          onClick={clearAppliedPromo}
+                          disabled={submittingOrder}
+                          className="rounded-xl border border-slate-200 px-3 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                        >
+                          Remove
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={applyPromoCode}
+                          disabled={validatingPromo || cart.length === 0}
+                          className="rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          {validatingPromo ? 'Checking…' : 'Apply'}
+                        </button>
+                      )}
+                    </div>
+                    {promoError ? (
+                      <p
+                        id="promo-error"
+                        className="mt-2 text-xs font-medium text-rose-600"
+                        role="alert"
+                      >
+                        {promoError}
+                      </p>
+                    ) : appliedPromo ? (
+                      <p
+                        id="promo-help"
+                        className="mt-2 text-xs leading-5 text-emerald-700"
+                      >
+                        {appliedPromo.discount_percent}% off eligible items from{' '}
+                        {appliedPromo.business_name}.
+                      </p>
+                    ) : (
+                      <p
+                        id="promo-help"
+                        className="mt-2 text-xs leading-5 text-slate-500"
+                      >
+                        Codes only discount products from their specific business.
+                      </p>
+                    )}
+                    {!appliedPromo &&
+                      promoCodes
+                        .filter((promo) =>
+                          cart.some(
+                            (item) => item.business_id === promo.business_id,
+                          ),
+                        )
+                        .map((promo) => (
+                          <button
+                            type="button"
+                            key={promo.code}
+                            onClick={() => applyPromoCode(undefined, promo.code)}
+                            disabled={validatingPromo}
+                            className="mr-2 mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-50"
+                          >
+                            <Tag className="h-3 w-3" />
+                            {promo.code} · {promo.discount_percent}% off
+                          </button>
+                        ))}
+                  </div>
                   <label
                     htmlFor="pau-email"
                     className="block text-sm font-semibold text-slate-700"
@@ -879,7 +1284,9 @@ export default function App() {
                   </p>
                   <button
                     type="submit"
-                    disabled={cart.length === 0 || submittingOrder}
+                    disabled={
+                      cart.length === 0 || submittingOrder || validatingPromo
+                    }
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3.5 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     {submittingOrder ? (
@@ -888,7 +1295,7 @@ export default function App() {
                         Confirming booking…
                       </>
                     ) : (
-                      <>Confirm booking · {formatPrice(cartTotal)}</>
+                      <>Confirm booking · {formatPrice(checkoutTotal)}</>
                     )}
                   </button>
                 </form>

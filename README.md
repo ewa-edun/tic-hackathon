@@ -34,7 +34,14 @@ because the workbook does not specify them. The backend exposes:
 - `GET /api/businesses/{business_id}` — fetch one business.
 - `GET /api/businesses/{business_id}/products` — browse one business’s listings.
 - `GET /api/products?business_id={id}` — filter listings by business.
-- `POST /api/orders` — book cart items using `{ "pau_email": "...@pau.edu.ng", "items": [{ "product_id": 1, "quantity": 1 }] }`.
+- `GET /api/promo-codes` — list active business-specific offers.
+- `POST /api/promo-codes/validate` — validate a code against cart items and return its eligible subtotal and discount.
+- `POST /api/orders` — book cart items using `{ "pau_email": "...@pau.edu.ng", "items": [{ "product_id": 1, "quantity": 1 }], "promo_code": "PREETY10" }`. The `promo_code` field is optional; discounts only apply to products belonging to the code’s business.
+
+The starter directory includes `TEKK10`, `PREETY10`, `DAPPER10`, and `JOZIE10`,
+each offering 10% off that vendor’s products. Codes are stored in the
+`promo_codes` table and can be changed or deactivated there. Favorites are saved
+in the browser for the current device and do not require an account.
 
 ### Run locally
 

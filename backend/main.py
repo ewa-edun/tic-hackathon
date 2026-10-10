@@ -78,11 +78,23 @@ class OrderModel(Base):
     productTitle = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
     total = Column(Float, nullable=False)
+    promo_code = Column(String, nullable=True)
+    discount = Column(Float, nullable=False, default=0.0)
     status = Column(String, default="Processing")
     buyerName = Column(String, nullable=False)
     pau_email = Column(String, nullable=True)
     date = Column(String, nullable=False)
     shippingAddress = Column(String, nullable=False)
+
+
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    code = Column(String, unique=True, index=True, nullable=False)
+    business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False)
+    discount_percent = Column(Float, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
 
 
 # create_all creates new tables; the migration below adds fields to existing tables.
@@ -205,6 +217,12 @@ def migrate_legacy_database() -> None:
             )
         if "pau_email" not in order_columns:
             connection.execute(text("ALTER TABLE orders ADD COLUMN pau_email VARCHAR"))
+        if "promo_code" not in order_columns:
+            connection.execute(text("ALTER TABLE orders ADD COLUMN promo_code VARCHAR"))
+        if "discount" not in order_columns:
+            connection.execute(
+                text("ALTER TABLE orders ADD COLUMN discount FLOAT NOT NULL DEFAULT 0")
+            )
 
 
 def seed_database() -> None:
@@ -306,6 +324,38 @@ def seed_database() -> None:
             product.stock = 10
             product.shippingInfo = "Contact vendor to arrange your order"
         db.commit()
+
+        # These starter codes are scoped to individual vendors and can be changed
+        # or disabled by updating the corresponding promo_codes rows.
+        starter_promos = {
+            "TEKK10": "Tekk",
+            "PREETY10": "Pretty Things.Co",
+            "DAPPER10": "Dapper Steeze",
+            "JOZIE10": "Jozie Glam and Glow",
+        }
+        for code, org_name in starter_promos.items():
+            business = (
+                db.query(Business)
+                .filter(Business.org_name.ilike(org_name))
+                .first()
+            )
+            if business is None:
+                continue
+            promo = (
+                db.query(PromoCode)
+                .filter(PromoCode.code == code)
+                .first()
+            )
+            if promo is None:
+                db.add(
+                    PromoCode(
+                        code=code,
+                        business_id=business.id,
+                        discount_percent=10,
+                        is_active=True,
+                    )
+                )
+        db.commit()
     finally:
         db.close()
 
@@ -389,6 +439,7 @@ class OrderLine(BaseModel):
 class OrderCreate(BaseModel):
     pau_email: str
     items: List[OrderLine] = Field(min_length=1)
+    promo_code: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("pau_email")
     @classmethod
@@ -400,6 +451,43 @@ class OrderCreate(BaseModel):
             raise ValueError("Enter a valid @pau.edu.ng email address")
         return value
 
+    @field_validator("promo_code")
+    @classmethod
+    def normalize_promo_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Z0-9-]+", normalized):
+            raise ValueError("Enter a valid promo code")
+        return normalized
+
+
+class PromoCodeCheck(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    items: List[OrderLine] = Field(min_length=1)
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9-]+", normalized):
+            raise ValueError("Enter a valid promo code")
+        return normalized
+
+
+class PromoCodeResponse(BaseModel):
+    code: str
+    business_id: int
+    business_name: str
+    discount_percent: float
+
+
+class PromoCodeCheckResponse(PromoCodeResponse):
+    eligible_subtotal: float
+    discount_amount: float
+
 
 class OrderResponse(BaseModel):
     id: str
@@ -407,6 +495,8 @@ class OrderResponse(BaseModel):
     productTitle: str
     quantity: int
     total: float
+    promo_code: Optional[str]
+    discount: float
     status: str
     buyerName: str
     pau_email: Optional[str]
@@ -489,6 +579,96 @@ def get_products(
     return query.order_by(ProductModel.id).all()
 
 
+def get_promo_discount(
+    db: Session,
+    code: str,
+    products_by_id: dict,
+    quantities_by_id: dict,
+):
+    promo = (
+        db.query(PromoCode)
+        .filter(PromoCode.code == code, PromoCode.is_active.is_(True))
+        .first()
+    )
+    if promo is None:
+        raise HTTPException(status_code=404, detail="That promo code is not valid.")
+
+    business = db.query(Business).filter(Business.id == promo.business_id).first()
+    if business is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This promo code is not linked to an available business.",
+        )
+    if not 0 < promo.discount_percent <= 100:
+        raise HTTPException(
+            status_code=409,
+            detail="This promo code has an invalid discount configuration.",
+        )
+    eligible_subtotal = sum(
+        products_by_id[product_id].price * quantity
+        for product_id, quantity in quantities_by_id.items()
+        if products_by_id[product_id].business_id == promo.business_id
+    )
+    if eligible_subtotal <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{code} is only valid for products from {business.org_name}.",
+        )
+
+    return promo, business, eligible_subtotal, round(
+        eligible_subtotal * promo.discount_percent / 100, 2
+    )
+
+
+@app.get("/api/promo-codes", response_model=List[PromoCodeResponse])
+def get_promo_codes(
+    business_id: Optional[int] = Query(None, gt=0),
+    db: Session = Depends(get_db),
+):
+    query = db.query(PromoCode, Business).join(
+        Business, PromoCode.business_id == Business.id
+    )
+    query = query.filter(PromoCode.is_active.is_(True))
+    if business_id is not None:
+        query = query.filter(PromoCode.business_id == business_id)
+    return [
+        {
+            "code": promo.code,
+            "business_id": promo.business_id,
+            "business_name": business.org_name,
+            "discount_percent": promo.discount_percent,
+        }
+        for promo, business in query.order_by(PromoCode.code).all()
+    ]
+
+
+@app.post("/api/promo-codes/validate", response_model=PromoCodeCheckResponse)
+def validate_promo_code(payload: PromoCodeCheck, db: Session = Depends(get_db)):
+    quantities_by_id = {}
+    for item in payload.items:
+        quantities_by_id[item.product_id] = (
+            quantities_by_id.get(item.product_id, 0) + item.quantity
+        )
+    products_by_id = {}
+    for product_id in quantities_by_id:
+        product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+        if product is None:
+            raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+        products_by_id[product_id] = product
+
+    promo, business, subtotal, discount = get_promo_discount(
+        db, payload.code, products_by_id, quantities_by_id
+    )
+    return {
+        "code": promo.code,
+        "business_id": business.id,
+        "business_name": business.org_name,
+        "discount_percent": promo.discount_percent,
+        "eligible_subtotal": round(subtotal, 2),
+        "discount_amount": discount,
+    }
+
+
 @app.post(
     "/api/products",
     response_model=ProductResponse,
@@ -553,17 +733,52 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)):
             )
         products_by_id[product_id] = product
 
+    promo_details = None
+    if payload.promo_code:
+        promo_details = get_promo_discount(
+            db,
+            payload.promo_code,
+            products_by_id,
+            quantities_by_id,
+        )
+
     current_date = datetime.now().strftime("%Y-%m-%d")
     created_orders = []
+    eligible_product_ids = (
+        [
+            product_id
+            for product_id, product in products_by_id.items()
+            if promo_details and product.business_id == promo_details[0].business_id
+        ]
+        if promo_details
+        else []
+    )
+    remaining_discount = promo_details[3] if promo_details else 0.0
     for product_id, quantity in quantities_by_id.items():
         product = products_by_id[product_id]
         product.stock -= quantity
+        line_total = product.price * quantity
+        line_discount = 0.0
+        if product_id in eligible_product_ids:
+            if len(eligible_product_ids) == 1:
+                line_discount = remaining_discount
+            else:
+                line_discount = min(
+                    remaining_discount,
+                    round(
+                        line_total * promo_details[0].discount_percent / 100, 2
+                    ),
+                )
+                remaining_discount = round(remaining_discount - line_discount, 2)
+            eligible_product_ids.remove(product_id)
         order = OrderModel(
             id=f"ORD-{uuid4().hex[:12].upper()}",
             product_id=product.id,
             productTitle=product.title,
             quantity=quantity,
-            total=product.price * quantity,
+            total=round(line_total - line_discount, 2),
+            promo_code=promo_details[0].code if line_discount else None,
+            discount=line_discount,
             status="Processing",
             buyerName=payload.pau_email,
             pau_email=payload.pau_email,
