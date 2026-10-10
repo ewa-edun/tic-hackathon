@@ -286,15 +286,6 @@ input:focus-visible {
   isolation: isolate;
 }
 
-.business-card-cover::after {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: linear-gradient(0deg, rgba(11, 20, 35, 0.2), transparent 68%);
-  content: "";
-  pointer-events: none;
-}
-
 .business-cover-image {
   z-index: -1;
 }

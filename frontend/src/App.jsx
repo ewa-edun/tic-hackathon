@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = 'https://tic-hackathon.onrender.com';
 const PAU_EMAIL_PATTERN = /^[^\s@]+@pau\.edu\.ng$/;
 const FAVORITES_STORAGE_KEY = 'pauconnect:favorites:v1';
 const formatPrice = (price) =>
@@ -805,7 +805,7 @@ export default function App() {
                         {getInitials(business.org_name)}
                       </span>
                       {business.verified && (
-                        <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full border border-white/40 bg-white/90 px-2.5 py-1 text-[10px] font-bold text-emerald-700 shadow-sm backdrop-blur">
+                        <span className="absolute right-4 top-4 z-10 inline-flex items-center gap-1 rounded-full border border-white/40 bg-white/90 px-2.5 py-1 text-[10px] font-bold text-emerald-700 shadow-sm backdrop-blur">
                           <BadgeCheck className="h-3.5 w-3.5" />
                           VERIFIED
                         </span>
